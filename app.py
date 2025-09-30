@@ -4,7 +4,15 @@ import base64
 import hmac
 import hashlib
 from functools import wraps
+# (Your other imports like os, json, flask, etc.)
 
+# Import cryptographic libraries (CORRECTED LINE)
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.asymmetric import x25519
+from cryptography.hazmat.primitives import serialization # This was the missing part
+from cryptography.exceptions import InvalidTag
+
+# (The rest of your app.py code)
 from flask import Flask, request, jsonify, Response, abort
 
 # (All your configuration and crypto functions remain the same)
