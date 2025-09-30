@@ -6,7 +6,7 @@ app = Flask(__name__)
 # --- Step 1: Define your Verify Token ---
 # You must create this token. It's a secret password.
 # For security, set this in Render's "Environment" settings.
-VERIFY_TOKEN = "PASTE_YOUR_SECRET_VERIFY_TOKEN_HERE"
+VERIFY_TOKEN = "obisar2121!"
 
 
 # This endpoint now accepts GET (for verification) and POST (for messages)
