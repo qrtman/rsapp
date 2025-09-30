@@ -1,49 +1,45 @@
-# Import the Flask library
+import os
 from flask import Flask, request, jsonify
 
-# Create a new Flask application
 app = Flask(__name__)
 
-# Define the endpoint URL that WhatsApp will send requests to
-@app.route('/api/whatsapp', methods=['POST'])
+# --- Step 1: Define your Verify Token ---
+# You must create this token. It's a secret password.
+# For security, set this in Render's "Environment" settings.
+VERIFY_TOKEN = "PASTE_YOUR_SECRET_VERIFY_TOKEN_HERE"
+
+
+# This endpoint now accepts GET (for verification) and POST (for messages)
+@app.route('/api/whatsapp', methods=['GET', 'POST'])
 def whatsapp_endpoint():
-    """
-    This is the main endpoint for the WhatsApp Flow.
-    It receives an encrypted payload, will decrypt it,
-    process the request, and send back an encrypted response.
-    """
-    # Get the raw data from the request
-    request_data = request.get_data()
+    
+    # --- Step 2: Handle the GET request for webhook verification ---
+    if request.method == 'GET':
+        mode = request.args.get('hub.mode')
+        token = request.args.get('hub.verify_token')
+        challenge = request.args.get('hub.challenge')
 
-    # For now, we'll just print it to see what we receive.
-    # This helps with debugging.
-    print("Received raw data:", request_data)
+        if mode == 'subscribe' and token == VERIFY_TOKEN:
+            print('WEBHOOK_VERIFIED')
+            return challenge, 200
+        else:
+            print('VERIFICATION_FAILED')
+            return 'Verification token does not match', 403
 
-    # --- TODO: DECRYPTION LOGIC ---
-    # Here is where you will eventually add the code to
-    # decrypt the 'request_data' using your private key.
+    # --- Step 3: Handle the POST request (your original code) ---
+    elif request.method == 'POST':
+        request_data = request.get_data()
+        print("Received raw data:", request_data)
 
-    # --- TODO: YOUR BUSINESS LOGIC ---
-    # After decrypting, you'll process the user's request.
-    # For example, check which button they pressed and decide
-    # which screen to send back.
-
-    # --- TODO: ENCRYPTION LOGIC ---
-    # Before sending the response, you must encrypt it.
-    # We will build a sample response and encrypt it here.
-
-    # For now, we'll just send a simple, unencrypted JSON response for testing.
-    response_payload = {
-        "version": "1.0",
-        "data": {
-            "message": "Response from the endpoint!"
+        # --- TODO: DECRYPTION LOGIC for Flows/Messages ---
+        
+        response_payload = {
+            "version": "1.0",
+            "data": {
+                "message": "Response from the endpoint!"
+            }
         }
-    }
+        return jsonify(response_payload)
 
-    # Return the response as JSON
-    return jsonify(response_payload)
-
-# This allows the app to run
 if __name__ == '__main__':
-    # The port is automatically handled by Render, so you don't need to specify it.
     app.run()
