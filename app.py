@@ -18,7 +18,7 @@ app = Flask(__name__)
 load_dotenv()
 
 # --- CONFIGURATION ---
-VERIFY_TOKEN = "obisar2121!"
+verify_token = "obisar2121!"
 APP_SECRET = os.environ.get("APP_SECRET")
 PRIVATE_KEY_PEM = os.environ.get("PRIVATE_KEY")
 PHONE_NUMBER_ID = os.environ.get("PHONE_NUMBER_ID")
@@ -169,7 +169,7 @@ def whatsapp_endpoint():
         mode = request.args.get('hub.mode')
         token = request.args.get('hub.verify_token')
         challenge = request.args.get('hub.challenge')
-        if mode == 'subscribe' and token == VERIFY_TOKEN:
+        if mode == 'subscribe' and token == verify_token:
             print("Webhook verified!")
             return challenge, 200
         else:
