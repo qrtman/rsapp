@@ -114,13 +114,22 @@ def send_request_to_graph_api(payload):
         "Content-Type": "application/json",
         "Authorization": "Bearer " + ACCESS_TOKEN,
     }
+    
+    # --- ДОБАВЛЕНО ЛОГИРОВАНИЕ ---
+    # Этот код выведет в лог точный JSON, который мы отправляем в Meta
+    print("--- Отправка данных в Meta ---")
+    print(payload)
+    print("-----------------------------")
+    
     try:
         response = requests.post(GRAPH_API_URL, headers=headers, data=payload)
         response.raise_for_status()
         print("Сообщение успешно отправлено!")
     except requests.exceptions.RequestException as e:
         print(f"Ошибка при отправке сообщения: {e}")
-
+        # Дополнительно выведем ответ от сервера Meta, если он есть
+        if e.response is not None:
+            print(f"Ответ сервера Meta: {e.response.text}")
 
 # --- ЛОГИКА ОБРАБОТКИ ВЕБХУКОВ ---
 def process_text_message(message_body, phone_number, name):
