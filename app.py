@@ -1,43 +1,37 @@
 import os
 import json
-import base64
 import hmac
 import hashlib
-import uuid
 import requests
 from functools import wraps
 
-from flask import Flask, request, jsonify, Response, abort
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from cryptography.hazmat.primitives.asymmetric import x25519
-from cryptography.hazmat.primitives import serialization
-from cryptography.exceptions import InvalidTag
+from flask import Flask, request, jsonify, abort
 from dotenv import load_dotenv
 
 app = Flask(__name__)
 load_dotenv()
 
-# --- CONFIGURATION ---
-VERIFY_TOKEN = "obisar2121!" # Using uppercase convention
+# --- КОНФИГУРАЦИЯ ---
+VERIFY_TOKEN = "obisar2121!"
 APP_SECRET = os.environ.get("APP_SECRET")
-PRIVATE_KEY_PEM = os.environ.get("PRIVATE_KEY")
 PHONE_NUMBER_ID = os.environ.get("PHONE_NUMBER_ID")
 ACCESS_TOKEN = os.environ.get("ACCESS_TOKEN")
 
-# --- Basic Sanity Checks for Environment Variables ---
+# --- Проверка наличия переменных окружения ---
 if not APP_SECRET:
     raise ValueError("APP_SECRET environment variable not set.")
-if not PRIVATE_KEY_PEM:
-    raise ValueError("PRIVATE_KEY environment variable not set.")
 if not PHONE_NUMBER_ID:
     raise ValueError("PHONE_NUMBER_ID environment variable not set.")
 if not ACCESS_TOKEN:
     raise ValueError("ACCESS_TOKEN environment variable not set.")
 
-PRIVATE_KEY = serialization.load_pem_private_key(PRIVATE_KEY_PEM.encode(), password=None)
 GRAPH_API_URL = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
 
-# --- DECORATOR FOR SIGNATURE VALIDATION ---
+# --- Словарь для хранения состояния диалога с пользователем ---
+# В реальном приложении это была бы база данных (например, Redis или PostgreSQL)
+user_sessions = {}
+
+# --- ДЕКОРАТОР ДЛЯ ПРОВЕРКИ ПОДПИСИ ---
 def validate_signature(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
@@ -50,66 +44,15 @@ def validate_signature(f):
         return f(*args, **kwargs)
     return decorated_function
 
-# --- CRYPTOGRAPHIC FUNCTIONS ---
-def decrypt_request(encrypted_aes_key_b64, initial_vector_b64, encrypted_flow_data_b64):
-    encrypted_aes_key = base64.b64decode(encrypted_aes_key_b64)
-    initial_vector = base64.b64decode(initial_vector_b64)
-    encrypted_flow_data = base64.b64decode(encrypted_flow_data_b64)
-    whatsapp_public_key = x25519.X25519PublicKey.from_public_bytes(encrypted_aes_key[:32])
-    shared_key = PRIVATE_KEY.exchange(whatsapp_public_key)
-    aes_key = shared_key
-    aesgcm = AESGCM(aes_key)
-    decrypted_data = aesgcm.decrypt(initial_vector, encrypted_flow_data, None)
-    return json.loads(decrypted_data.decode('utf-8')), aes_key
-
-def encrypt_response(aes_key, response_data):
-    aesgcm = AESGCM(aes_key)
-    iv = os.urandom(12)
-    encrypted_data = aesgcm.encrypt(iv, json.dumps(response_data).encode('utf-8'), None)
-    return base64.b64encode(iv + encrypted_data).decode('utf-8')
-
-
-# --- MESSAGE SENDING LOGIC ---
+# --- ЛОГИКА ОТПРАВКИ СООБЩЕНИЙ ---
 def send_text_message(text, phone_number):
-    """Sends a simple text message."""
+    """Отправляет простое текстовое сообщение."""
     payload = json.dumps({
         "messaging_product": "whatsapp",
         "to": str(phone_number),
         "type": "text",
         "text": {"preview_url": False, "body": text}
     })
-    send_request_to_graph_api(payload)
-
-def send_flow_message(flow_id, screen_id, flow_header, flow_body, phone_number):
-    """Constructs and sends a message to trigger a Flow."""
-    flow_token = str(uuid.uuid4())
-    interactive_payload = {
-        "type": "flow",
-        "header": {"type": "text", "text": flow_header},
-        "body": {"text": flow_body},
-        "footer": {"text": "Click the button to start"},
-        "action": {
-            "name": "flow",
-            "parameters": {
-                "flow_message_version": "3",
-                "flow_token": flow_token,
-                "flow_id": flow_id,
-                "flow_cta": "Start",
-                "flow_action": "navigate",
-                "flow_action_payload": {"screen": screen_id},
-            }
-        }
-    }
-    payload = json.dumps({
-        "messaging_product": "whatsapp",
-        "to": str(phone_number),
-        "type": "interactive",
-        "interactive": interactive_payload
-    })
-    send_request_to_graph_api(payload)
-
-def send_request_to_graph_api(payload):
-    """Generic function to send a POST request to the Graph API."""
     headers = {
         "Content-Type": "application/json",
         "Authorization": "Bearer " + ACCESS_TOKEN,
@@ -117,47 +60,59 @@ def send_request_to_graph_api(payload):
     try:
         response = requests.post(GRAPH_API_URL, headers=headers, data=payload)
         response.raise_for_status()
-        print("Message sent successfully!")
+        print(f"Message sent to {phone_number}")
     except requests.exceptions.RequestException as e:
         print(f"Error sending message: {e}")
 
+# --- ЛОГИКА ОБРАБОТКИ ДИАЛОГА ---
+def process_chat_message(message_body, phone_number, name):
+    """Обрабатывает входящие сообщения и ведет диалог."""
+    user_input = message_body.lower().strip()
+    session = user_sessions.get(phone_number, {})
 
-# --- WEBHOOK PROCESSING LOGIC ---
-def process_text_message(message_body, phone_number, name):
-    """Processes incoming text messages and decides on a response."""
-    user_input = message_body.lower()
-    
-    if "привет" in user_input or "здравствуйте" in user_input:
-        reply_text = f"Здравствуйте, {name}! Я ваш помощник по подбору авто из Кореи. Чтобы начать, просто напишите 'подбор'."
+    # Этап 1: Начало диалога
+    if not session:
+        user_sessions[phone_number] = {"step": "start"}
+        reply_text = f"Здравствуйте, {name}! Я помогу вам подобрать автомобиль из Кореи. Начнем? (Да/Нет)"
         send_text_message(reply_text, phone_number)
-        
-    elif "подбор" in user_input:
-        send_flow_message(
-            flow_id="16208261822239246",
-            screen_id="WELCOME_SCREEN",
-            flow_header="Подбор Авто",
-            flow_body="Нажмите 'Start', чтобы начать подбор автомобиля вашей мечты.",
-            phone_number=phone_number
-        )
-    else:
-        reply_text = "Я не совсем понял ваш запрос. Напишите 'подбор', чтобы начать процесс выбора автомобиля."
+        return
+
+    # Этап 2: Получение бюджета
+    if session.get("step") == "start":
+        if user_input == "да":
+            user_sessions[phone_number]["step"] = "get_budget"
+            reply_text = "Отлично! Какой у вас бюджет в долларах США? (например, 25000)"
+            send_text_message(reply_text, phone_number)
+        else:
+            reply_text = "Хорошо, если передумаете, просто напишите мне."
+            send_text_message(reply_text, phone_number)
+            user_sessions.pop(phone_number, None) # Завершаем сессию
+        return
+
+    # Этап 3: Получение типа кузова
+    if session.get("step") == "get_budget":
+        if user_input.isdigit():
+            user_sessions[phone_number]["budget"] = user_input
+            user_sessions[phone_number]["step"] = "get_car_type"
+            reply_text = "Принято. Какой тип кузова вас интересует? (например, Седан, Кроссовер, Внедорожник)"
+            send_text_message(reply_text, phone_number)
+        else:
+            reply_text = "Пожалуйста, введите бюджет цифрами."
+            send_text_message(reply_text, phone_number)
+        return
+
+    # Этап 4: Завершение
+    if session.get("step") == "get_car_type":
+        user_sessions[phone_number]["car_type"] = user_input
+        budget = user_sessions[phone_number].get('budget')
+        car_type = user_sessions[phone_number].get('car_type')
+
+        reply_text = f"Спасибо! Ваш запрос записан:\n\n*Тип авто*: {car_type}\n*Бюджет*: до ${budget}\n\nНаш менеджер скоро с вами свяжется."
         send_text_message(reply_text, phone_number)
+        user_sessions.pop(phone_number, None) # Завершаем сессию
+        return
 
-def process_flow_completion(response_json, phone_number, name):
-    """Processes the data from a completed static Flow."""
-    flow_data = json.loads(response_json)
-    flow_key = flow_data.get("flow_key")
-    
-    if flow_key == "contact":
-        firstname = flow_data.get("firstname", "")
-        issue = flow_data.get("issue", "")
-        reply = f"Спасибо, {firstname}! Мы получили ваше сообщение: '{issue}'. Скоро свяжемся с вами."
-        send_text_message(reply, phone_number)
-    else:
-        print(f"Received unknown flow completion with key: {flow_key}")
-
-
-# --- MAIN FLASK ENDPOINT ---
+# --- ОСНОВНОЙ ENDPOINT ---
 @app.route('/api/whatsapp', methods=['GET', 'POST'])
 @validate_signature
 def whatsapp_endpoint():
@@ -174,52 +129,21 @@ def whatsapp_endpoint():
             return 'Verification token does not match', 403
 
     elif request.method == 'POST':
-        # This block is now correctly indented
         request_body = request.get_json()
-        
-        if 'encrypted_aes_key' in request_body:
-            try:
-                decrypted_data, aes_key = decrypt_request(
-                    request_body['encrypted_aes_key'],
-                    request_body['initial_vector'],
-                    request_body['encrypted_flow_data']
-                )
-                print("Decrypted Flow Data:", decrypted_data)
-
-                flow_action = decrypted_data.get('action')
-                response_payload = {"version": "3.0", "screen": "ERROR_SCREEN", "data": {}}
-                if flow_action == 'INIT':
-                    response_payload = {"version": "3.0", "screen": "WELCOME_SCREEN", "data": {}}
-                
-                encrypted_response_body = encrypt_response(aes_key, response_payload)
-                return Response(encrypted_response_body, status=200, mimetype='text/plain')
-
-            except (InvalidTag, ValueError, KeyError) as e:
-                print(f"Decryption failed: {e}")
-                return Response("Decryption failed", status=421, mimetype='text/plain')
-        
-        else:
-            try:
-                changes = request_body['entry'][0]['changes'][0]['value']
-                message_object = changes.get('messages')
-                
-                if message_object:
-                    message_data = message_object[0]
+        try:
+            changes = request_body['entry'][0]['changes'][0]['value']
+            message_object = changes.get('messages')
+            
+            if message_object:
+                message_data = message_object[0]
+                if 'text' in message_data:
                     phone_number = message_data['from']
                     name = changes['contacts'][0]['profile']['name']
-                    
-                    if 'text' in message_data:
-                        message_body = message_data['text']['body']
-                        process_text_message(message_body, phone_number, name)
-                    
-                    elif 'interactive' in message_data and 'nfm_reply' in message_data['interactive']:
-                        response_json = message_data['interactive']['nfm_reply']['response_json']
-                        process_flow_completion(response_json, phone_number, name)
+                    message_body = message_data['text']['body']
+                    process_chat_message(message_body, phone_number, name)
 
-                return jsonify(status="ok"), 200
+            return jsonify(status="ok"), 200
 
-            except (KeyError, IndexError) as e:
-                print(f"Error processing standard webhook: {e}")
-                return jsonify(status="error", reason="malformed data"), 400
-
-# The invalid '}' has been removed from the end of the file
+        except (KeyError, IndexError) as e:
+            print(f"Error processing webhook: {e}")
+            return jsonify(status="error", reason="malformed data"), 400
