@@ -69,7 +69,7 @@ def encrypt_response(aes_key, response_data):
     return base64.b64encode(iv + encrypted_data).decode('utf-8')
 
 
-# --- MESSAGE SENDING LOGIC (Adapted from main.py) ---
+# --- MESSAGE SENDING LOGIC ---
 
 def send_text_message(text, phone_number):
     """Sends a simple text message."""
@@ -123,29 +123,26 @@ def send_request_to_graph_api(payload):
         print(f"Error sending message: {e}")
 
 
-# --- WEBHOOK PROCESSING LOGIC (Adapted from main.py) ---
+# --- WEBHOOK PROCESSING LOGIC ---
 
 def process_text_message(message_body, phone_number, name):
     """Processes incoming text messages and decides on a response."""
     user_input = message_body.lower()
     
-    # Simple keyword matching
     if "привет" in user_input or "здравствуйте" in user_input:
         reply_text = f"Здравствуйте, {name}! Я ваш помощник по подбору авто из Кореи. Чтобы начать, просто напишите 'подбор'."
         send_text_message(reply_text, phone_number)
         
     elif "подбор" in user_input:
-        # Here you would trigger your car selection flow
-        # Make sure to replace <YOUR_FLOW_ID> with the actual ID from WhatsApp Manager
+        # ** IMPORTANT: Replace with your actual Flow ID **
         send_flow_message(
-            flow_id="2672977462872599",
-            screen_id="WELCOME_SCREEN", # The entry screen of your flow
+            flow_id="16208261822239246", # Example ID from your screenshot
+            screen_id="WELCOME_SCREEN",
             flow_header="Подбор Авто",
             flow_body="Нажмите 'Start', чтобы начать подбор автомобиля вашей мечты.",
             phone_number=phone_number
         )
     else:
-        # Default fallback response
         reply_text = "Я не совсем понял ваш запрос. Напишите 'подбор', чтобы начать процесс выбора автомобиля."
         send_text_message(reply_text, phone_number)
 
@@ -164,8 +161,8 @@ def process_flow_completion(response_json, phone_number, name):
 
 
 # --- MAIN FLASK ENDPOINT ---
-
 @app.route('/api/whatsapp', methods=['GET', 'POST'])
+@validate_signature
 def whatsapp_endpoint():
     
     if request.method == 'GET':
@@ -182,7 +179,7 @@ def whatsapp_endpoint():
     elif request.method == 'POST':
         request_body = request.get_json()
         
-        # Check if this is an encrypted Flow message (for multi-step flows)
+        # Check if this is an encrypted Flow message
         if 'encrypted_aes_key' in request_body:
             try:
                 decrypted_data, aes_key = decrypt_request(
@@ -192,11 +189,9 @@ def whatsapp_endpoint():
                 )
                 print("Decrypted Flow Data:", decrypted_data)
 
-                # --- Your existing multi-screen flow logic router goes here ---
-                # This remains the same as before, handling INIT, data_exchange, etc.
+                # Your multi-screen flow logic router
                 flow_action = decrypted_data.get('action')
-                # ... (rest of your multi-screen logic)
-                response_payload = {"version": "3.0", "screen": "ERROR_SCREEN", "data": {}} # Default
+                response_payload = {"version": "3.0", "screen": "ERROR_SCREEN", "data": {}}
                 if flow_action == 'INIT':
                     response_payload = {"version": "3.0", "screen": "WELCOME_SCREEN", "data": {}}
                 
@@ -207,7 +202,7 @@ def whatsapp_endpoint():
                 print(f"Decryption failed: {e}")
                 return Response("Decryption failed", status=421, mimetype='text/plain')
         
-        # Otherwise, process it as a standard unencrypted webhook
+        # Process standard unencrypted webhooks
         else:
             try:
                 changes = request_body['entry'][0]['changes'][0]['value']
@@ -218,12 +213,10 @@ def whatsapp_endpoint():
                     phone_number = message_data['from']
                     name = changes['contacts'][0]['profile']['name']
                     
-                    # Check for a standard text message
                     if 'text' in message_data:
                         message_body = message_data['text']['body']
                         process_text_message(message_body, phone_number, name)
                     
-                    # Check for a completed flow (from a terminal screen)
                     elif 'interactive' in message_data and 'nfm_reply' in message_data['interactive']:
                         response_json = message_data['interactive']['nfm_reply']['response_json']
                         process_flow_completion(response_json, phone_number, name)
