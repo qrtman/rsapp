@@ -11,7 +11,7 @@ app = Flask(__name__)
 load_dotenv()
 
 # --- КОНФИГУРАЦИЯ ДЛЯ TELEGRAM ---
-TELEGRAM_BOT_TOKEN = os.environ.get("7963015300:AAGWYh1h2pb-K-iI9VYdaSFffCCvMWP7aT4")
+TELEGRAM_BOT_TOKEN = os.environ.get("8257873112AAH4z7WgpEizp8aeLIC4PU7otNPPCtc47ek")
 DATABASE_URL = os.environ.get("https://rsapp.onrender.com")
 MANAGER_CHAT_ID = os.environ.get("6427625827")
 MANAGER_PASSWORD = os.environ.get("obisar21")
