@@ -1,4 +1,3 @@
-# telegram_bot.py
 import os
 import json
 import requests
@@ -100,7 +99,7 @@ def process_chat_message(message_body, chat_id, name):
             cur.execute("UPDATE tg_clients SET managed_by_manager = TRUE WHERE chat_id = %s RETURNING name", (client_to_manage,))
             client_name = cur.fetchone()
             if client_name:
-                send_telegram_message(f"Вы взяли управление чатом с {client_name[0]} (`{client_to_manage}`).", chat_id_str)
+                send_telegram_message(f"Вы взяли управление чатом с {client_name[0]} (`{client_to_manage}`). Теперь все ваши сообщения будут пересылаться ему.", chat_id_str)
                 send_telegram_message("К вам подключился менеджер.", client_to_manage)
             else: send_telegram_message("Клиент не найден.", chat_id_str)
         
@@ -113,7 +112,7 @@ def process_chat_message(message_body, chat_id, name):
                 send_telegram_message("Менеджер отключился. Вам снова отвечает бот.", client_to_release)
             else: send_telegram_message("Клиент не найден.", chat_id_str)
         
-        else:
+        else: # Пересылка сообщения от менеджера клиенту
             cur.execute("SELECT chat_id FROM tg_clients WHERE managed_by_manager = TRUE")
             active_client = cur.fetchone()
             if active_client:
