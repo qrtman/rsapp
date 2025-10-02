@@ -161,6 +161,7 @@ def process_flow_completion(response_json, phone_number, name):
 
 
 # --- MAIN FLASK ENDPOINT ---
+# --- MAIN FLASK ENDPOINT ---
 @app.route('/api/whatsapp', methods=['GET', 'POST'])
 @validate_signature
 def whatsapp_endpoint():
@@ -169,6 +170,8 @@ def whatsapp_endpoint():
         mode = request.args.get('hub.mode')
         token = request.args.get('hub.verify_token')
         challenge = request.args.get('hub.challenge')
+        
+        # CORRECTED: Use the correct variable name 'verify_token'
         if mode == 'subscribe' and token == verify_token:
             print("Webhook verified!")
             return challenge, 200
@@ -176,6 +179,8 @@ def whatsapp_endpoint():
             print("Webhook verification failed.")
             return 'Verification token does not match', 403
 
+    elif request.method == 'POST':
+        # ... (the rest of your POST logic is correct and does not need to change) ...
     elif request.method == 'POST':
         request_body = request.get_json()
         
