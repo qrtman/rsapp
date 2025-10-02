@@ -138,7 +138,7 @@ def process_text_message(message_body, phone_number, name):
         # Here you would trigger your car selection flow
         # Make sure to replace <YOUR_FLOW_ID> with the actual ID from WhatsApp Manager
         send_flow_message(
-            flow_id="1620826182228246",
+            flow_id="2672977462872599",
             screen_id="WELCOME_SCREEN", # The entry screen of your flow
             flow_header="Подбор Авто",
             flow_body="Нажмите 'Start', чтобы начать подбор автомобиля вашей мечты.",
