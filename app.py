@@ -18,7 +18,7 @@ app = Flask(__name__)
 load_dotenv()
 
 # --- CONFIGURATION ---
-verify_token = "obisar2121!"
+VERIFY_TOKEN = "obisar2121!" # Using uppercase convention
 APP_SECRET = os.environ.get("APP_SECRET")
 PRIVATE_KEY_PEM = os.environ.get("PRIVATE_KEY")
 PHONE_NUMBER_ID = os.environ.get("PHONE_NUMBER_ID")
@@ -70,7 +70,6 @@ def encrypt_response(aes_key, response_data):
 
 
 # --- MESSAGE SENDING LOGIC ---
-
 def send_text_message(text, phone_number):
     """Sends a simple text message."""
     payload = json.dumps({
@@ -124,7 +123,6 @@ def send_request_to_graph_api(payload):
 
 
 # --- WEBHOOK PROCESSING LOGIC ---
-
 def process_text_message(message_body, phone_number, name):
     """Processes incoming text messages and decides on a response."""
     user_input = message_body.lower()
@@ -134,9 +132,8 @@ def process_text_message(message_body, phone_number, name):
         send_text_message(reply_text, phone_number)
         
     elif "подбор" in user_input:
-        # ** IMPORTANT: Replace with your actual Flow ID **
         send_flow_message(
-            flow_id="16208261822239246", # Example ID from your screenshot
+            flow_id="16208261822239246",
             screen_id="WELCOME_SCREEN",
             flow_header="Подбор Авто",
             flow_body="Нажмите 'Start', чтобы начать подбор автомобиля вашей мечты.",
@@ -161,7 +158,6 @@ def process_flow_completion(response_json, phone_number, name):
 
 
 # --- MAIN FLASK ENDPOINT ---
-# --- MAIN FLASK ENDPOINT ---
 @app.route('/api/whatsapp', methods=['GET', 'POST'])
 @validate_signature
 def whatsapp_endpoint():
@@ -170,9 +166,7 @@ def whatsapp_endpoint():
         mode = request.args.get('hub.mode')
         token = request.args.get('hub.verify_token')
         challenge = request.args.get('hub.challenge')
-        
-        # CORRECTED: Use the correct variable name 'verify_token'
-        if mode == 'subscribe' and token == verify_token:
+        if mode == 'subscribe' and token == VERIFY_TOKEN:
             print("Webhook verified!")
             return challenge, 200
         else:
@@ -180,11 +174,9 @@ def whatsapp_endpoint():
             return 'Verification token does not match', 403
 
     elif request.method == 'POST':
-        # ... (the rest of your POST logic is correct and does not need to change) ...
-    elif request.method == 'POST':
+        # This block is now correctly indented
         request_body = request.get_json()
         
-        # Check if this is an encrypted Flow message
         if 'encrypted_aes_key' in request_body:
             try:
                 decrypted_data, aes_key = decrypt_request(
@@ -194,7 +186,6 @@ def whatsapp_endpoint():
                 )
                 print("Decrypted Flow Data:", decrypted_data)
 
-                # Your multi-screen flow logic router
                 flow_action = decrypted_data.get('action')
                 response_payload = {"version": "3.0", "screen": "ERROR_SCREEN", "data": {}}
                 if flow_action == 'INIT':
@@ -207,7 +198,6 @@ def whatsapp_endpoint():
                 print(f"Decryption failed: {e}")
                 return Response("Decryption failed", status=421, mimetype='text/plain')
         
-        # Process standard unencrypted webhooks
         else:
             try:
                 changes = request_body['entry'][0]['changes'][0]['value']
@@ -231,3 +221,5 @@ def whatsapp_endpoint():
             except (KeyError, IndexError) as e:
                 print(f"Error processing standard webhook: {e}")
                 return jsonify(status="error", reason="malformed data"), 400
+
+# The invalid '}' has been removed from the end of the file
