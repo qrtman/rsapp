@@ -39,16 +39,29 @@
     </div>
 
     <script>
-        // Инициализируем Mini App
         const tg = window.Telegram.WebApp;
-        tg.expand(); // Растягиваем на весь экран
-        tg.MainButton.hide(); // Скрываем стандартную кнопку
+    tg.expand();
+    tg.MainButton.hide();
 
-        // Функция для загрузки и отображения клиентов
-        function loadClients() {
-            // Запрашиваем данные у нашего бэкенда
-            fetch('/api/clients')
-                .then(response => response.json())
+    function loadClients() {
+        // Проверяем, что у нас есть данные для аутентификации
+        if (!tg.initData) {
+            document.getElementById('client-list').innerHTML = '<p>Ошибка: откройте эту страницу через Telegram.</p>';
+            return;
+        }
+
+        // Отправляем запрос на наш API, добавив в заголовок данные для проверки
+        fetch('/api/clients', {
+            headers: {
+                'Authorization': `tma ${tg.initData}` // <--- Вот эта строка добавлена
+            }
+        })
+        .then(response => {
+            if (!response.ok) {
+                throw new Error('Ошибка авторизации!');
+            }
+            return response.json();
+        })
                 .then(clients => {
                     const clientListDiv = document.getElementById('client-list');
                     clientListDiv.innerHTML = ''; // Очищаем контейнер
