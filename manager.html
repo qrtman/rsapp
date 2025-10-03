@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Панель Менеджера</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        /* Стили для красивого отображения */
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            padding: 15px; 
+            margin: 0;
+            background-color: var(--tg-theme-bg-color, #ffffff);
+            color: var(--tg-theme-text-color, #000000);
+        }
+        h1 { font-size: 24px; }
+        .client-list-container { margin-top: 20px; }
+        .client {
+            background-color: var(--tg-theme-secondary-bg-color, #f0f0f0);
+            border-radius: 10px;
+            padding: 15px;
+            margin-bottom: 10px;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+        .client:active {
+            transform: scale(0.98);
+        }
+        .client h3 { margin: 0; font-size: 18px; }
+        .client p { margin: 5px 0 0; color: var(--tg-theme-hint-color, #888888); }
+    </style>
+</head>
+<body>
+
+    <h1>Панель управления</h1>
+    <div id="client-list">
+        <p>Загрузка клиентов...</p>
+    </div>
+
+    <script>
+        // Инициализируем Mini App
+        const tg = window.Telegram.WebApp;
+        tg.expand(); // Растягиваем на весь экран
+        tg.MainButton.hide(); // Скрываем стандартную кнопку
+
+        // Функция для загрузки и отображения клиентов
+        function loadClients() {
+            // Запрашиваем данные у нашего бэкенда
+            fetch('/api/clients')
+                .then(response => response.json())
+                .then(clients => {
+                    const clientListDiv = document.getElementById('client-list');
+                    clientListDiv.innerHTML = ''; // Очищаем контейнер
+
+                    if (clients.length === 0) {
+                        clientListDiv.innerHTML = '<p>Список клиентов пуст.</p>';
+                        return;
+                    }
+
+                    // Для каждого клиента создаем красивую карточку
+                    clients.forEach(client => {
+                        const clientDiv = document.createElement('div');
+                        clientDiv.className = 'client';
+                        
+                        clientDiv.innerHTML = `
+                            <h3>${client.name}</h3>
+                            <p>Статус: ${client.status}</p>
+                            <code>ID: ${client.chat_id}</code>
+                        `;
+
+                        // Добавляем действие по клику на карточку
+                        clientDiv.onclick = function() {
+                            tg.showConfirm(`Показать историю чата с ${client.name}?`, function(isConfirmed){
+                                if (isConfirmed) {
+                                    // Отправляем команду боту, чтобы он прислал историю
+                                    const dataToSend = {
+                                        action: 'get_history',
+                                        chat_id: client.chat_id
+                                    };
+                                    tg.sendData(JSON.stringify(dataToSend));
+                                }
+                            });
+                        };
+
+                        clientListDiv.appendChild(clientDiv);
+                    });
+                })
+                .catch(error => {
+                    const clientListDiv = document.getElementById('client-list');
+                    clientListDiv.innerHTML = '<p>Не удалось загрузить клиентов.</p>';
+                    console.error('Error fetching clients:', error);
+                });
+        }
+
+        // Загружаем клиентов при открытии страницы
+        window.addEventListener('load', loadClients);
+    </script>
+</body>
+</html>
