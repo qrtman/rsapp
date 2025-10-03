@@ -4,7 +4,7 @@ import requests
 import psycopg2
 from io import BytesIO
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 from dotenv import load_dotenv
 
 # --- ИНИЦИАЛИЗАЦИЯ И КОНФИГУРАЦИЯ ---
@@ -101,6 +101,51 @@ def get_file_content(file_id):
         print(f"Ошибка при скачивании файла: {e}")
         return None
 
+# --- НОВОЕ: ФУНКЦИЯ ДЛЯ ИСТОРИИ КЛИЕНТА ---
+def get_client_history(client_chat_id):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT m.message_text, m.sender_is_bot, m.is_voice 
+        FROM tg_messages m 
+        JOIN tg_clients c ON m.client_id = c.id 
+        WHERE c.chat_id = %s 
+        ORDER BY m.timestamp DESC 
+        LIMIT 20
+    """, (client_chat_id,))
+    messages = cur.fetchall()
+    cur.close()
+    conn.close()
+    
+    if not messages:
+        return "История сообщений для этого клиента пуста."
+    
+    history = f"История чата с `{client_chat_id}`:\n" + "-"*20 + "\n"
+    for msg in reversed(messages):
+        sender = "Бот" if msg[1] else "Клиент"
+        text = "[Голосовое сообщение]" if msg[2] else msg[0]
+        history += f"*{sender}*: {text}\n"
+    return history
+
+# --- НОВОЕ: ОТДАЧА DASHBOARD И API СПИСКА КЛИЕНТОВ ---
+@app.route('/manager-dashboard')
+def manager_dashboard():
+    """Отдает HTML-файл нашего дашборда."""
+    return send_from_directory('.', 'manager.html')
+
+@app.route('/api/clients')
+def get_clients_api():
+    """Отдает список клиентов в формате JSON для нашего дашборда."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT chat_id, name, status FROM tg_clients ORDER BY id DESC;")
+    clients_data = cur.fetchall()
+    cur.close()
+    conn.close()
+    
+    client_list = [{"chat_id": row[0], "name": row[1], "status": row[2]} for row in clients_data]
+    return jsonify(client_list)
+
 # --- ОСНОВНАЯ ЛОГИКА БОТА ---
 
 def process_manager_command(message_body, chat_id_str):
@@ -112,7 +157,7 @@ def process_manager_command(message_body, chat_id_str):
         pwd = message_body.split(' ', 1)[1]
         if pwd == MANAGER_PASSWORD:
             manager_sessions[chat_id_str] = {"logged_in": True}
-            send_telegram_message("✅ Вход выполнен.\nКоманды:\n`/list` - список клиентов\n`/takeover <id>` - взять чат\n`/history <id>` - история чата", chat_id_str)
+            send_telegram_message("✅ Вход выполнен.\nКоманды:\n`/list` - список клиентов\n`/takeover <id>` - взять чат\n`/history <id>` - история ча...", chat_id_str)
         else:
             send_telegram_message("❌ Неверный пароль.", chat_id_str)
         return
@@ -266,12 +311,25 @@ def process_voice_message(file_id, chat_id_str, name):
     conn.close()
 
 
-# --- WEBHOOK ENDPOINT ---
+# --- ОБНОВЛЕННЫЙ WEBHOOK ENDPOINT ---
 @app.route('/webhook', methods=['POST'])
 def telegram_webhook():
     try:
         data = request.get_json()
         
+        # НОВАЯ ЛОГИКА: Обработка данных от Mini App менеджера
+        if 'message' in data and 'web_app_data' in data['message']:
+            chat_id_str = str(data['message']['chat']['id'])
+            if chat_id_str == MANAGER_CHAT_ID:
+                web_app_data = data['message']['web_app_data']['data']
+                app_data = json.loads(web_app_data)
+                action = app_data.get('action')
+                if action == 'get_history':
+                    client_chat_id = app_data.get('chat_id')
+                    history_text = get_client_history(client_chat_id)
+                    send_telegram_message(history_text, MANAGER_CHAT_ID)
+                return jsonify(status="ok"), 200
+
         # Проверяем, есть ли в сообщении текст
         if 'message' in data and 'text' in data['message']:
             chat_id = data['message']['chat']['id']
