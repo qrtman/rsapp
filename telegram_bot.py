@@ -2,8 +2,12 @@ import os
 import json
 import requests
 import psycopg2
+import hmac
+import hashlib
 from io import BytesIO
+from urllib.parse import unquote
 
+# Импорты Flask для работы с веб-сервером
 from flask import Flask, request, jsonify, send_from_directory
 from dotenv import load_dotenv
 
@@ -16,12 +20,12 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 MANAGER_CHAT_ID = os.environ.get("MANAGER_CHAT_ID")
 MANAGER_PASSWORD = os.environ.get("MANAGER_PASSWORD")
 
+# Проверка, что все переменные окружения установлены
 if not all([TELEGRAM_BOT_TOKEN, DATABASE_URL, MANAGER_CHAT_ID, MANAGER_PASSWORD]):
     raise ValueError("Одна или несколько переменных окружения не установлены. Проверьте все 4 переменные на Render.")
 
 # --- API URL-адреса Telegram ---
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
-# URL для скачивания файлов (голосовых сообщений)
 TELEGRAM_FILE_URL = f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}"
 
 manager_sessions = {}
@@ -37,18 +41,28 @@ def init_db():
     try:
         conn = get_db_connection()
         cur = conn.cursor()
+        # Создание таблицы клиентов
         cur.execute('''
             CREATE TABLE IF NOT EXISTS tg_clients (
-                id SERIAL PRIMARY KEY, chat_id VARCHAR(50) UNIQUE NOT NULL, name VARCHAR(100),
-                status VARCHAR(50) DEFAULT 'new', managed_by_manager BOOLEAN DEFAULT FALSE,
-                dialog_step VARCHAR(50) DEFAULT 'start', budget VARCHAR(100), car_type VARCHAR(100)
+                id SERIAL PRIMARY KEY,
+                chat_id VARCHAR(50) UNIQUE NOT NULL,
+                name VARCHAR(100),
+                status VARCHAR(50) DEFAULT 'new',
+                managed_by_manager BOOLEAN DEFAULT FALSE,
+                dialog_step VARCHAR(50) DEFAULT 'start',
+                budget VARCHAR(100),
+                car_type VARCHAR(100)
             );
         ''')
+        # Создание таблицы сообщений
         cur.execute('''
             CREATE TABLE IF NOT EXISTS tg_messages (
-                id SERIAL PRIMARY KEY, client_id INTEGER REFERENCES tg_clients(id),
-                message_text TEXT, is_voice BOOLEAN DEFAULT FALSE,
-                sender_is_bot BOOLEAN, timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                id SERIAL PRIMARY KEY,
+                client_id INTEGER REFERENCES tg_clients(id),
+                message_text TEXT,
+                is_voice BOOLEAN DEFAULT FALSE,
+                sender_is_bot BOOLEAN,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         ''')
         conn.commit()
@@ -59,7 +73,6 @@ def init_db():
         print(f"Ошибка при инициализации базы данных: {e}")
 
 # --- ФУНКЦИИ ДЛЯ РАБОТЫ С TELEGRAM API ---
-
 def send_telegram_message(text, chat_id, keyboard=None):
     """Отправляет текстовое сообщение. Может прикреплять клавиатуру."""
     url = f"{TELEGRAM_API_URL}/sendMessage"
@@ -69,8 +82,7 @@ def send_telegram_message(text, chat_id, keyboard=None):
     
     headers = {"Content-Type": "application/json"}
     try:
-        response = requests.post(url, headers=headers, data=json.dumps(payload))
-        response.raise_for_status()
+        requests.post(url, headers=headers, data=json.dumps(payload), timeout=10).raise_for_status()
     except requests.exceptions.RequestException as e:
         print(f"Ошибка при отправке текстового сообщения: {e}")
 
@@ -80,8 +92,7 @@ def send_voice_message(voice_content, chat_id, caption=""):
     files = {'voice': ('voice_message.ogg', voice_content, 'audio/ogg')}
     data = {'chat_id': chat_id, 'caption': caption}
     try:
-        response = requests.post(url, files=files, data=data)
-        response.raise_for_status()
+        requests.post(url, files=files, data=data, timeout=10).raise_for_status()
     except requests.exceptions.RequestException as e:
         print(f"Ошибка при отправке голосового сообщения: {e}")
 
@@ -89,53 +100,64 @@ def get_file_content(file_id):
     """Скачивает файл (голосовое сообщение) с серверов Telegram."""
     try:
         url = f"{TELEGRAM_API_URL}/getFile?file_id={file_id}"
-        response = requests.get(url)
+        response = requests.get(url, timeout=10)
         response.raise_for_status()
         file_path = response.json()['result']['file_path']
         
         download_url = f"{TELEGRAM_FILE_URL}/{file_path}"
-        file_response = requests.get(download_url)
+        file_response = requests.get(download_url, timeout=10)
         file_response.raise_for_status()
         return file_response.content
     except requests.exceptions.RequestException as e:
         print(f"Ошибка при скачивании файла: {e}")
         return None
 
-# --- НОВОЕ: ФУНКЦИЯ ДЛЯ ИСТОРИИ КЛИЕНТА ---
-def get_client_history(client_chat_id):
-    conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT m.message_text, m.sender_is_bot, m.is_voice 
-        FROM tg_messages m 
-        JOIN tg_clients c ON m.client_id = c.id 
-        WHERE c.chat_id = %s 
-        ORDER BY m.timestamp DESC 
-        LIMIT 20
-    """, (client_chat_id,))
-    messages = cur.fetchall()
-    cur.close()
-    conn.close()
-    
-    if not messages:
-        return "История сообщений для этого клиента пуста."
-    
-    history = f"История чата с `{client_chat_id}`:\n" + "-"*20 + "\n"
-    for msg in reversed(messages):
-        sender = "Бот" if msg[1] else "Клиент"
-        text = "[Голосовое сообщение]" if msg[2] else msg[0]
-        history += f"*{sender}*: {text}\n"
-    return history
+# --- БЕЗОПАСНОСТЬ MINI APP ---
+def validate_init_data(init_data, bot_token):
+    """Проверяет подлинность данных от Telegram Mini App."""
+    try:
+        secret_key = hmac.new("WebAppData".encode(), bot_token.encode(), hashlib.sha256).digest()
+        data_check_string = []
+        hash_str = ''
+        params = sorted([x.split('=', 1) for x in init_data.split('&')])
+        
+        for key, value in params:
+            if key == 'hash':
+                hash_str = value
+            else:
+                data_check_string.append(f"{key}={unquote(value)}")
+        
+        data_check_string = "\n".join(data_check_string)
+        calculated_hash = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
+        
+        if calculated_hash == hash_str:
+            for key, value in params:
+                if key == 'user':
+                    user_data = json.loads(unquote(value))
+                    return user_data
+    except Exception as e:
+        print(f"Ошибка валидации: {e}")
+    return None
 
-# --- НОВОЕ: ОТДАЧА DASHBOARD И API СПИСКА КЛИЕНТОВ ---
+# --- МАРШРУТЫ ДЛЯ MINI APP ---
 @app.route('/manager-dashboard')
 def manager_dashboard():
-    """Отдает HTML-файл нашего дашборда."""
+    """Отдает HTML-файл дашборда."""
     return send_from_directory('.', 'manager.html')
 
 @app.route('/api/clients')
 def get_clients_api():
-    """Отдает список клиентов в формате JSON для нашего дашборда."""
+    """Отдает список клиентов, но только авторизованному менеджеру."""
+    auth_header = request.headers.get('Authorization')
+    if not auth_header or not auth_header.startswith('tma '):
+        return jsonify({"error": "Нет данных для авторизации"}), 401
+
+    init_data = auth_header.split(' ', 1)[1]
+    user_data = validate_init_data(init_data, TELEGRAM_BOT_TOKEN)
+
+    if not user_data or str(user_data.get('id')) != MANAGER_CHAT_ID:
+        return jsonify({"error": "Доступ запрещен"}), 403
+
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute("SELECT chat_id, name, status FROM tg_clients ORDER BY id DESC;")
@@ -147,8 +169,31 @@ def get_clients_api():
     return jsonify(client_list)
 
 # --- ОСНОВНАЯ ЛОГИКА БОТА ---
+def send_client_history(client_chat_id, recipient_chat_id):
+    """Получает историю чата клиента и отправляет ее получателю."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT m.message_text, m.sender_is_bot, m.is_voice FROM tg_messages m "
+        "JOIN tg_clients c ON m.client_id = c.id WHERE c.chat_id = %s "
+        "ORDER BY m.timestamp DESC LIMIT 20", (client_chat_id,)
+    )
+    messages = cur.fetchall()
+    cur.close()
+    conn.close()
+    
+    if not messages:
+        history_text = f"История сообщений для клиента `{client_chat_id}` пуста."
+    else:
+        history_text = f"История чата с `{client_chat_id}`:\n" + "-"*20 + "\n"
+        for msg in reversed(messages):
+            sender = "Бот/Менеджер" if msg[1] else "Клиент"
+            text = "[Голосовое сообщение]" if msg[2] else msg[0]
+            history_text += f"*{sender}*: {text}\n"
+            
+    send_telegram_message(history_text, recipient_chat_id)
 
-def process_manager_command(message_body, chat_id_str):
+def process_manager_message(message_body, chat_id_str):
     """Обрабатывает все команды и сообщения от менеджера."""
     conn = get_db_connection()
     cur = conn.cursor()
@@ -157,16 +202,14 @@ def process_manager_command(message_body, chat_id_str):
         pwd = message_body.split(' ', 1)[1]
         if pwd == MANAGER_PASSWORD:
             manager_sessions[chat_id_str] = {"logged_in": True}
-            send_telegram_message("✅ Вход выполнен.\nКоманды:\n`/list` - список клиентов\n`/takeover <id>` - взять чат\n`/history <id>` - история ча...", chat_id_str)
+            send_telegram_message("✅ Вход выполнен.\nКоманды:\n`/list`\n`/takeover <id>`\n`/history <id>`", chat_id_str)
         else:
             send_telegram_message("❌ Неверный пароль.", chat_id_str)
-        return
-
-    if not manager_sessions.get(chat_id_str, {}).get("logged_in"):
+        
+    elif not manager_sessions.get(chat_id_str, {}).get("logged_in"):
         send_telegram_message("Пожалуйста, войдите: `/login <пароль>`", chat_id_str)
-        return
-
-    if message_body.lower() == '/list':
+    
+    elif message_body.lower() == '/list':
         cur.execute("SELECT name, chat_id, status FROM tg_clients ORDER BY id DESC LIMIT 10;")
         clients = cur.fetchall()
         reply = "Последние 10 клиентов:\n\n" if clients else "Клиентов нет."
@@ -177,7 +220,7 @@ def process_manager_command(message_body, chat_id_str):
     elif message_body.lower().startswith('/takeover '):
         try:
             client_to_manage = message_body.split(' ', 1)[1]
-            cur.execute("UPDATE tg_clients SET managed_by_manager = FALSE;") # Сброс всех
+            cur.execute("UPDATE tg_clients SET managed_by_manager = FALSE;")
             cur.execute("UPDATE tg_clients SET managed_by_manager = TRUE WHERE chat_id = %s RETURNING name;", (client_to_manage,))
             client_name = cur.fetchone()
             if client_name:
@@ -191,22 +234,11 @@ def process_manager_command(message_body, chat_id_str):
     elif message_body.lower().startswith('/history '):
         try:
             client_chat_id = message_body.split(' ', 1)[1]
-            cur.execute("SELECT m.message_text, m.sender_is_bot, m.is_voice FROM tg_messages m JOIN tg_clients c ON m.client_id = c.id WHERE c.chat_id = %s ORDER BY m.timestamp DESC LIMIT 20", (client_chat_id,))
-            messages = cur.fetchall()
-            if not messages:
-                send_telegram_message("История сообщений для этого клиента пуста.", chat_id_str)
-                return
-            
-            history = f"История чата с `{client_chat_id}`:\n" + "-"*20 + "\n"
-            for msg in reversed(messages): # reversed чтобы читать сверху вниз
-                sender = "Бот" if msg[1] else "Клиент"
-                text = "[Голосовое сообщение]" if msg[2] else msg[0]
-                history += f"*{sender}*: {text}\n"
-            send_telegram_message(history, chat_id_str)
+            send_client_history(client_chat_id, chat_id_str)
         except IndexError:
             send_telegram_message("Используйте: `/history <chat_id>`", chat_id_str)
 
-    else: # Если не команда, то это сообщение для клиента
+    else:
         cur.execute("SELECT chat_id FROM tg_clients WHERE managed_by_manager = TRUE;")
         active_client = cur.fetchone()
         if active_client:
@@ -236,19 +268,17 @@ def process_client_message(message_body, chat_id_str, name):
         manager_message = f"Сообщение от {name} (`{chat_id_str}`):\n\n{message_body}"
         send_telegram_message(manager_message, MANAGER_CHAT_ID)
     else:
-        # Логика диалога с ботом
         user_input = message_body.lower().strip()
-        reply_text = ""
-        keyboard = None
+        reply_text, keyboard = "", None
         
         if dialog_step == 'start':
-            reply_text = f"Здравствуйте, {name}! Я помогу вам подобрать автомобиль из Кореи. Начнем?"
+            reply_text = f"Здравствуйте, {name}! Я помогу вам подобрать автомобиль. Начнем?"
             keyboard = {"keyboard": [[{"text": "Да"}], [{"text": "Нет"}]], "one_time_keyboard": True, "resize_keyboard": True}
             cur.execute("UPDATE tg_clients SET dialog_step = 'ask_budget' WHERE id = %s;", (client_id,))
         
         elif dialog_step == 'ask_budget':
             if user_input == 'да':
-                reply_text = "Какой у вас бюджет в долларах США? (например, 25000)"
+                reply_text = "Какой у вас бюджет в долларах? (например, 25000)"
                 cur.execute("UPDATE tg_clients SET dialog_step = 'get_budget' WHERE id = %s;", (client_id,))
             else:
                 reply_text = "Хорошо, если передумаете, просто напишите."
@@ -256,7 +286,7 @@ def process_client_message(message_body, chat_id_str, name):
         
         elif dialog_step == 'get_budget':
             if user_input.isdigit():
-                reply_text = "Принято. Какой тип кузова вас интересует? (Седан, Кроссовер, Внедорожник и т.д.)"
+                reply_text = "Принято. Какой тип кузова вас интересует?"
                 cur.execute("UPDATE tg_clients SET budget = %s, dialog_step = 'get_car_type' WHERE id = %s;", (user_input, client_id))
             else:
                 reply_text = "Пожалуйста, введите бюджет только цифрами."
@@ -266,7 +296,6 @@ def process_client_message(message_body, chat_id_str, name):
             budget = cur.fetchone()[0]
             reply_text = f"Спасибо! Ваш запрос записан:\n\n*Тип авто*: {message_body}\n*Бюджет*: до ${budget}\n\nНаш менеджер скоро с вами свяжется."
             cur.execute("UPDATE tg_clients SET car_type = %s, dialog_step = 'done', status = 'completed' WHERE id = %s;", (message_body, client_id))
-            # Уведомление менеджеру о новом запросе
             manager_notification = f"Новый запрос от {name} (`{chat_id_str}`)\nБюджет: до ${budget}\nТип: {message_body}"
             send_telegram_message(manager_notification, MANAGER_CHAT_ID)
 
@@ -288,21 +317,19 @@ def process_voice_message(file_id, chat_id_str, name):
     if not client:
         cur.execute("INSERT INTO tg_clients (chat_id, name) VALUES (%s, %s) RETURNING id, managed_by_manager;", (chat_id_str, name))
         client = cur.fetchone()
-    client_id, managed_by_manager = client
+    client_id, _ = client
     
-    # Сохраняем в БД информацию о том, что это было голосовое
     cur.execute("INSERT INTO tg_messages (client_id, message_text, sender_is_bot, is_voice) VALUES (%s, %s, FALSE, TRUE);", (client_id, "Голосовое сообщение"))
     
     voice_content = get_file_content(file_id)
-    if not voice_content:
-        return
+    if not voice_content: return
 
-    if chat_id_str == MANAGER_CHAT_ID: # Если менеджер отправил голосовое
+    if chat_id_str == MANAGER_CHAT_ID:
         cur.execute("SELECT chat_id FROM tg_clients WHERE managed_by_manager = TRUE;")
         active_client = cur.fetchone()
         if active_client:
             send_voice_message(voice_content, active_client[0])
-    else: # Если клиент отправил голосовое
+    else:
         caption = f"Голосовое от {name} (`{chat_id_str}`)"
         send_voice_message(voice_content, MANAGER_CHAT_ID, caption)
 
@@ -310,45 +337,42 @@ def process_voice_message(file_id, chat_id_str, name):
     cur.close()
     conn.close()
 
-
-# --- ОБНОВЛЕННЫЙ WEBHOOK ENDPOINT ---
+# --- WEBHOOK ENDPOINT ---
 @app.route('/webhook', methods=['POST'])
 def telegram_webhook():
     try:
         data = request.get_json()
-        
-        # НОВАЯ ЛОГИКА: Обработка данных от Mini App менеджера
+        if not data: return jsonify(status="ok"), 200
+
+        # 1. ОБРАБОТКА КОМАНД ОТ MINI APP
         if 'message' in data and 'web_app_data' in data['message']:
             chat_id_str = str(data['message']['chat']['id'])
             if chat_id_str == MANAGER_CHAT_ID:
                 web_app_data = data['message']['web_app_data']['data']
                 app_data = json.loads(web_app_data)
-                action = app_data.get('action')
-                if action == 'get_history':
+                
+                if app_data.get('action') == 'get_history':
                     client_chat_id = app_data.get('chat_id')
-                    history_text = get_client_history(client_chat_id)
-                    send_telegram_message(history_text, MANAGER_CHAT_ID)
-                return jsonify(status="ok"), 200
-
-        # Проверяем, есть ли в сообщении текст
-        if 'message' in data and 'text' in data['message']:
+                    send_client_history(client_chat_id, MANAGER_CHAT_ID)
+        
+        # 2. ОБРАБОТКА ТЕКСТОВЫХ СООБЩЕНИЙ
+        elif 'message' in data and 'text' in data['message']:
             chat_id = data['message']['chat']['id']
             chat_id_str = str(chat_id)
             message_text = data['message']['text']
             user_name = data['message']['from'].get('first_name', 'User')
 
             if chat_id_str == MANAGER_CHAT_ID:
-                process_manager_command(message_text, chat_id_str)
+                process_manager_message(message_text, chat_id_str)
             else:
                 process_client_message(message_text, chat_id_str, user_name)
 
-        # Проверяем, есть ли в сообщении голос
+        # 3. ОБРАБОТКА ГОЛОСОВЫХ СООБЩЕНИЙ
         elif 'message' in data and 'voice' in data['message']:
             chat_id = data['message']['chat']['id']
             chat_id_str = str(chat_id)
             user_name = data['message']['from'].get('first_name', 'User')
             file_id = data['message']['voice']['file_id']
-            
             process_voice_message(file_id, chat_id_str, user_name)
 
         return jsonify(status="ok"), 200
@@ -357,10 +381,12 @@ def telegram_webhook():
         return jsonify(status="error"), 500
 
 # --- ЗАПУСК ПРИЛОЖЕНИЯ ---
-# Глобальный вызов для инициализации БД при старте на Render
-init_db()
+if __name__ != '__main__':
+    # Эта часть выполняется при старте на Render через Gunicorn
+    init_db()
 
 if __name__ == "__main__":
     # Эта часть выполняется только при локальном запуске (python telegram_bot.py)
-    # На Render она не выполняется, поэтому init_db() вынесен выше
+    init_db()
     app.run(debug=True, port=5001)
+
